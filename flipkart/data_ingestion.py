@@ -1,5 +1,5 @@
 from langchain_astradb import AstraDBVectorStore
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 import os
 from flipkart.data_converter import dataconverter
 from dotenv import load_dotenv

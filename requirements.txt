@@ -1,23 +1,14 @@
-# langchain-astradb
-# langchain
-# langchain-community 
-# langchain-groq
-# datasets
-# pypdf
-# python-dotenv
-# pandas
-# flask
-# -e .
 
 
-streamlit
 
 langchain
 langchain-community
 langchain-groq
 langchain-astradb
-
+langchain-huggingface
 datasets
 pypdf
 python-dotenv
 pandas
+streamlit
+-e .
