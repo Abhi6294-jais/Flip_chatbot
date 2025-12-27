@@ -1,5 +1,5 @@
 from langchain_astradb import AstraDBVectorStore
-from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+from langchain_community.embeddings import HuggingFaceEmbeddings
 import os
 from flipkart.data_converter import dataconverter
 from dotenv import load_dotenv
@@ -12,23 +12,23 @@ ASTRA_DB_KEYSPACE=os.getenv("ASTRA_DB_KEYSPACE")
 HF_TOKEN = os.getenv("HF_TOKEN")
 
 
-GROQ_API_KEY=os.getenv("GROQ_API_KEY")
-ASTRA_DB_API_ENDPOINT=os.getenv("ASTRA_DB_API_ENDPOINT")
-ASTRA_DB_APPLICATION_TOKEN=os.getenv("ASTRA_DB_APPLICATION_TOKEN")
-ASTRA_DB_KEYSPACE=os.getenv("ASTRA_DB_KEYSPACE")
-HF_TOKEN = os.getenv("HF_TOKEN")
 
-embedding = HuggingFaceInferenceAPIEmbeddings(api_key= HF_TOKEN, model_name="BAAI/bge-base-en-v1.5")
+
+embeddings = HuggingFaceEmbeddings(
+    model_name="BAAI/bge-base-en-v1.5"
+)
+
 
 def data_ingestion(status):
 
     vstore = AstraDBVectorStore(
-        embedding=embedding,
-        collection_name = "flipkart",
-        api_endpoint = ASTRA_DB_API_ENDPOINT,
-        token = ASTRA_DB_APPLICATION_TOKEN,
-        namespace = ASTRA_DB_KEYSPACE 
+    embedding=embeddings,
+    collection_name="flipkart",
+    api_endpoint=ASTRA_DB_API_ENDPOINT,
+    token=ASTRA_DB_APPLICATION_TOKEN,
+    namespace=ASTRA_DB_KEYSPACE
     )
+
 
     storage = status
 
