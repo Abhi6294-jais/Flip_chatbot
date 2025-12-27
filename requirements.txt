@@ -1,14 +1,14 @@
-
-
-
+streamlit
 langchain
 langchain-community
-langchain-groq
 langchain-astradb
 langchain-huggingface
+langchain-groq
+sentence-transformers
+torch
+transformers
+pandas
+python-dotenv
 datasets
 pypdf
-python-dotenv
-pandas
-streamlit
 -e .
