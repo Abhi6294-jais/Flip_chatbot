@@ -1,6 +1,6 @@
-from dotenv import load_dotenv
 import os
-
+import re
+from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
@@ -8,32 +8,15 @@ from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
 from langchain_community.chat_message_histories import ChatMessageHistory
-from groq import BadRequestError as GroqBadRequestError
 
-from flipkart.data_ingestion import data_ingestion
-
-# Load env variables
+# Load environment variables
 load_dotenv()
 
-# Optional safety check
-if not os.getenv("GROQ_API_KEY"):
-    raise RuntimeError("❌ GROQ_API_KEY missing from .env")
-
-# Optional model selection via environment variable (e.g., GROQ_MODEL=llama-3.1-8b-instant)
+# Initialize LLM
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+llm = ChatGroq(model=GROQ_MODEL, temperature=0.1) # Lower temperature for consistency
 
-# Groq-only model initialization
-try:
-    llm = ChatGroq(model=GROQ_MODEL, temperature=0.5)
-except Exception as e:
-    raise RuntimeError(
-        f"Failed to initialize Groq LLM. Ensure GROQ_API_KEY is set and your Groq org/model permissions allow {GROQ_MODEL}."
-        f" Details: {e}"
-    )
-
-# -------------------------------------------------
-# MEMORY STORE
-# -------------------------------------------------
+# Session Store
 store = {}
 
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
@@ -44,18 +27,15 @@ def get_session_history(session_id: str) -> BaseChatMessageHistory:
 def clear_session_history(session_id: str):
     store.pop(session_id, None)
 
-# -------------------------------------------------
-# PROMPT
-# -------------------------------------------------
-PRODUCT_BOT_TEMPLATE = """You are a helpful and polite Flipkart ecommerce expert chatbot.
-Your primary goal is to provide accurate product information and recommendations based STRICTLY on the real customer reviews provided in the context below.
+# --- ENHANCED PROMPT ---
+PRODUCT_BOT_TEMPLATE = """You are a specialized Flipkart Product Expert.
+You provide recommendations based on the customer reviews provided in the CONTEXT.
 
-CRITICAL RULES:
-1. ONLY use the information provided in the CONTEXT.
-2. If the answer is not contained within the CONTEXT, you must explicitly say "I'm sorry, but I don't have enough information about that based on the current reviews." Do NOT make up, guess, or infer facts, prices, or specifications that are not explicitly stated.
-3. If discussing a product, try to mention the product name using the context's metadata if available.
-4. Keep your answers concise, helpful, and directly address the user's question.
-5. Do not hallucinate URLs, links, or contact numbers.
+INSTRUCTIONS:
+1. Mention specific product names found in the context.
+2. If multiple products are found, compare them briefly based on user reviews (e.g., "Users liked the battery of X but preferred the sound of Y").
+3. If the context is empty or unrelated to the question, say: "I couldn't find specific customer reviews for that product in our database. Would you like me to look for something else?"
+4. Avoid generic "I am an AI" intros. Get straight to the product details.
 
 CONTEXT:
 {context}
@@ -63,137 +43,77 @@ CONTEXT:
 QUESTION:
 {input}
 
-ANSWER:
-"""
+EXPERT RESPONSE:"""
 
-prompt = ChatPromptTemplate.from_messages(
-    [
-        ("system", PRODUCT_BOT_TEMPLATE),
-        ("human", "{input}")
-    ]
-)
+# --- UTILITY FUNCTIONS ---
 
-# -------------------------------------------------
-# BUILD RAG CHAIN (NO langchain.chains)
-# -------------------------------------------------
+def format_docs(docs):
+    """Formats retrieved docs and prints a debug log to the console."""
+    if not docs:
+        return "No relevant product reviews found."
+    
+    formatted = []
+    for i, d in enumerate(docs):
+        # We include metadata if available to help the LLM identify the specific product
+        title = d.metadata.get('product_name', 'Unknown Product')
+        formatted.append(f"--- Product: {title} ---\nReview Snippet: {d.page_content}")
+    
+    context_str = "\n\n".join(formatted)
+    # Debug: See what is actually being sent to the LLM
+    print(f"\n[DEBUG] Context Length: {len(docs)} snippets retrieved.")
+    return context_str
+
 def build_chain(vstore):
+    # Use Similarity Search with Score to filter out 'random' junk
+    # 'k: 5' provides a better variety for recommendations
+    retriever = vstore.as_retriever(search_kwargs={"k": 5})
 
-    retriever = vstore.as_retriever(search_kwargs={"k": 3})
-
-    def format_docs(docs):
-        return "\n\n".join(d.page_content for d in docs)
-
+    # 1. Contextualize Question (History + New Input -> Standalone Query)
     contextualize_q_system_prompt = (
-        "Given a chat history and the latest user question "
-        "which might reference context in the chat history, "
-        "formulate a standalone question which can be understood "
-        "without the chat history. Do NOT answer the question, "
-        "just reformulate it if needed and otherwise return it as is."
+        "Rephrase the latest user question into a standalone version that includes "
+        "the specific product names mentioned in the chat history. "
+        "If no product is mentioned, return the question as is."
     )
-
-    contextualize_q_prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", contextualize_q_system_prompt),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}")
-        ]
-    )
-
+    contextualize_q_prompt = ChatPromptTemplate.from_messages([
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}")
+    ])
     contextualize_q_chain = contextualize_q_prompt | llm | StrOutputParser()
 
-    def get_contextualized_question(inputs):
-        chat_history = inputs.get("chat_history", [])
-        if chat_history:
+    def get_query(inputs):
+        if inputs.get("chat_history"):
             return contextualize_q_chain.invoke(inputs)
         return inputs["input"]
 
-    def format_final_inputs(x):
-        return {
-            "context": x["context"],
-            "input": x["contextualized_query"]
-        }
-
-    def check_banned_keywords(inputs: dict) -> dict:
-        """
-        Deterministic guardrail: Block requests containing banned keywords.
-        Runs BEFORE anything else -- zero LLM cost for blocked requests.
-        """
-        banned_keywords = ["hack", "exploit", "malware", "jailbreak", "bypass"]
-        content = inputs.get("input", "")
-        
-        if isinstance(content, str):
-            content_lower = content.lower()
-            for keyword in banned_keywords:
-                if keyword in content_lower:
-                    print(f"Blocked -- keyword detected: '{keyword}'")
-                    raise ValueError(
-                        "I cannot process requests containing inappropriate content. "
-                        "Please rephrase your request."
-                    )
-        return inputs
-
-    def check_safety_guardrail(response):
-        """
-        Model-based guardrail: Use an LLM to evaluate response safety.
-        Runs AFTER the principal LLM produces a response, before it reaches the user.
-        """
-        # Using ChatGroq with a fast model for the safety check (equivalent to lightweight GPT-4o-mini)
-        safety_model = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-        
-        content = response.content if hasattr(response, 'content') else str(response)
-
-        safety_prompt = f"""Evaluate if this AI response is safe and appropriate for users.
-Respond with only 'SAFE' or 'UNSAFE'.
-
-Response to evaluate:
-{content}"""
-
-        result = safety_model.invoke(
-            [{"role": "user", "content": safety_prompt}]
-        )
-
-        if "UNSAFE" in result.content.upper():
-            print("Output flagged as UNSAFE -- replacing with safe fallback")
-            safe_fallback = (
-                "I'm unable to provide that response. "
-                "Please rephrase your request or contact support."
-            )
-            if hasattr(response, 'content'):
-                response.content = safe_fallback
-            elif isinstance(response, str):
-                response = safe_fallback
-                
-        return response
-
-    def sanitize_input(inputs: dict) -> dict:
+    # 2. Safety & Sanitization
+    def sanitize_and_guard(inputs: dict) -> dict:
         text = inputs.get("input", "")
-
-        # Simple deterministic sanitization for common sensitive patterns
-        import re
-        email_pattern = r"[\w\.-]+@[\w\.-]+"
-        cc_pattern = r"(?:\d[ -]*?){13,16}"
-        api_key_pattern = r"sk-[A-Za-z0-9]{32}"
-
-        text = re.sub(email_pattern, "[REDACTED_EMAIL]", text)
-        text = re.sub(cc_pattern, "[REDACTED_CREDIT_CARD]", text)
-        text = re.sub(api_key_pattern, "[REDACTED_API_KEY]", text)
-
+        banned = ["hack", "exploit", "jailbreak"]
+        if any(w in text.lower() for w in banned):
+            raise ValueError("Inappropriate content detected.")
+        
+        # Redact PII
+        text = re.sub(r"[\w\.-]+@[\w\.-]+", "[EMAIL]", text)
         inputs["input"] = text
         return inputs
 
+    # 3. Main RAG Logic
     rag_chain = (
-        RunnableLambda(check_banned_keywords)
-        | RunnableLambda(sanitize_input)
+        RunnableLambda(sanitize_and_guard)
         | RunnablePassthrough.assign(
-            contextualized_query=get_contextualized_question
+            standalone_query=get_query
         )
         | RunnablePassthrough.assign(
-            context=lambda x: format_docs(retriever.invoke(x["contextualized_query"]))
+            context=lambda x: format_docs(retriever.invoke(x["standalone_query"]))
         )
-        | format_final_inputs
-        | prompt
+        | (lambda x: {
+            "context": x["context"], 
+            "input": x["standalone_query"]
+        })
+        | ChatPromptTemplate.from_template(PRODUCT_BOT_TEMPLATE)
         | llm
-        | RunnableLambda(check_safety_guardrail)
+        | StrOutputParser()
     )
 
     return RunnableWithMessageHistory(

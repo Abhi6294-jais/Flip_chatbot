@@ -1,74 +1,61 @@
 import streamlit as st
-from flipkart.data_ingestion import data_ingestion
-from flipkart.retrieval_generation import build_chain
 import uuid
-from flipkart.retrieval_generation import clear_session_history
+from flipkart.data_ingestion import data_ingestion
+from flipkart.retrieval_generation import build_chain, clear_session_history
 
-st.set_page_config(
-    page_title="Flipkart Chatbot",
-    page_icon="🛒",
-    layout="centered"
-)
+st.set_page_config(page_title="Flipkart AI Assistant", page_icon="🛒")
 
 st.title("🛒 Flipkart Product Chatbot")
+st.caption("Ask me about electronics, clothing, or home appliances based on real reviews.")
 
-# Load chain once
 @st.cache_resource
-def load_chain():
+def load_rag_system():
+    # Ensure data_ingestion returns a valid vector store
     vstore = data_ingestion("done")
     return build_chain(vstore)
 
-chain = load_chain()
+try:
+    chain = load_rag_system()
+except Exception as e:
+    st.error(f"Initialization Error: {e}")
+    st.stop()
 
-
-
-class SessionStateCleaner:
-    def __init__(self, session_id):
-        self.session_id = session_id
-    
-    def __del__(self):
-        clear_session_history(self.session_id)
-
-# Session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
-    # This ensures backend history is automatically formatted and deleted from memory
-    # exactly when the user's Streamlit browser tab is closed/garbage collected.
-    st.session_state.cleaner = SessionStateCleaner(st.session_state.session_id)
 
+# Sidebar controls
+with st.sidebar:
+    if st.button("Clear Chat History"):
+        st.session_state.messages = []
+        clear_session_history(st.session_state.session_id)
+        st.rerun()
 
-# Display chat history
+# Display Chat
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# User input
-prompt = st.chat_input("Type your message...")
-
-if prompt:
-    # Show user message
+if prompt := st.chat_input("What are people saying about the latest iPhone?"):
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # Get bot response
-    try:
-        response = chain.invoke(
-            {"input": prompt},
-            config={"configurable": {"session_id": st.session_state.session_id}}
-        )
-        answer = response.content
-    except Exception as e:
-        # Show user-friendly error while recording details if available
-        st.error("Model failed: " + str(e))
-        answer = (
-            "⚠️ Sorry, I could not generate a response right now. "
-            "Please try again; if the issue continues, check your API credentials and quota."
-        )
-
-    st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
-        st.markdown(answer)
+        with st.spinner("Searching reviews..."):
+            try:
+                # Invoke the chain
+                response = chain.invoke(
+                    {"input": prompt},
+                    config={"configurable": {"session_id": st.session_state.session_id}}
+                )
+                # If you use StrOutputParser, response is a string. 
+                # If not, it's an AIMessage object.
+                answer = response.content if hasattr(response, 'content') else response
+                
+                st.markdown(answer)
+                st.session_state.messages.append({"role": "assistant", "content": answer})
+            except Exception as e:
+                st.error(f"I encountered an error: {e}")
