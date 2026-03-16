@@ -14,9 +14,9 @@ from flipkart.data_ingestion import data_ingestion
 load_dotenv()
 
 # Initialize LLM
-# Using llama-3.1-70b-versatile as requested in your correct code snippet
+# Using llama-3.3-70b-versatile as requested in your correct code snippet
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-model = ChatGroq(model="llama-3.1-70b-versatile", temperature=0.5)
+model = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.5)
 
 # Session Store for Chat History
 store = {}
