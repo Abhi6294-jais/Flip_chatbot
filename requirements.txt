@@ -4,6 +4,7 @@ langchain-community
 langchain-astradb
 langchain-huggingface
 langchain-groq
+openai
 pandas
 python-dotenv
 -e .

@@ -2,13 +2,14 @@ from dotenv import load_dotenv
 import os
 
 from langchain_groq import ChatGroq
+from langchain.chat_models import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
 from langchain_core.runnables import RunnablePassthrough, RunnableLambda
 from langchain_core.output_parsers import StrOutputParser
-from langchain.agents.middleware import PIIMiddleware
 from langchain_community.chat_message_histories import ChatMessageHistory
+from groq import BadRequestError as GroqBadRequestError
 
 from flipkart.data_ingestion import data_ingestion
 
@@ -19,11 +20,28 @@ load_dotenv()
 if not os.getenv("GROQ_API_KEY"):
     raise RuntimeError("❌ GROQ_API_KEY missing from .env")
 
-# Model
-llm = ChatGroq(
-    model="llama-3.1-8b-instant",
-    temperature=0.5
-)
+# Model factory with safe fallback
+
+def create_llm():
+    openai_key = os.getenv("OPENAI_API_KEY")
+    if openai_key:
+        return ChatOpenAI(
+            model_name="gpt-3.5-turbo",
+            temperature=0.5,
+            openai_api_key=openai_key,
+        )
+
+    # Default to Groq
+    return ChatGroq(model="llama-3.1-8b-instant", temperature=0.5)
+
+
+try:
+    llm = create_llm()
+except Exception as e:
+    raise RuntimeError(
+        "Failed to initialize LLM. Ensure OPENAI_API_KEY or GROQ_API_KEY is set and has access rights." 
+        f" Details: {e}"
+    )
 
 # -------------------------------------------------
 # MEMORY STORE

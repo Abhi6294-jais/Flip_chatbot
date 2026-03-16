@@ -61,8 +61,13 @@ if prompt:
             config={"configurable": {"session_id": st.session_state.session_id}}
         )
         answer = response.content
-    except ValueError as e:
-        answer = str(e)
+    except Exception as e:
+        # Show user-friendly error while recording details if available
+        st.error("Model failed: " + str(e))
+        answer = (
+            "⚠️ Sorry, I could not generate a response right now. "
+            "Please try again; if the issue continues, check your API credentials and quota."
+        )
 
     st.session_state.messages.append({"role": "assistant", "content": answer})
     with st.chat_message("assistant"):
