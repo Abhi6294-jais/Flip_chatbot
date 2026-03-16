@@ -68,25 +68,7 @@ def build_chain(vstore):
     # 'k: 5' provides a better variety for recommendations
     retriever = vstore.as_retriever(search_kwargs={"k": 5})
 
-    # 1. Contextualize Question (History + New Input -> Standalone Query)
-    contextualize_q_system_prompt = (
-        "Rephrase the latest user question into a standalone version that includes "
-        "the specific product names mentioned in the chat history. "
-        "If no product is mentioned, return the question as is."
-    )
-    contextualize_q_prompt = ChatPromptTemplate.from_messages([
-        ("system", contextualize_q_system_prompt),
-        MessagesPlaceholder(variable_name="chat_history"),
-        ("human", "{input}")
-    ])
-    contextualize_q_chain = contextualize_q_prompt | llm | StrOutputParser()
-
-    def get_query(inputs):
-        if inputs.get("chat_history"):
-            return contextualize_q_chain.invoke(inputs)
-        return inputs["input"]
-
-    # 2. Safety & Sanitization
+    # 1. Safety & Sanitization
     def sanitize_and_guard(inputs: dict) -> dict:
         text = inputs.get("input", "")
         banned = ["hack", "exploit", "jailbreak"]
@@ -98,20 +80,19 @@ def build_chain(vstore):
         inputs["input"] = text
         return inputs
 
-    # 3. Main RAG Logic
+    # 2. Main RAG Logic
+    # We've removed the contextualization step. 
+    # The 'input' is now passed directly to the retriever and the final prompt.
     rag_chain = (
         RunnableLambda(sanitize_and_guard)
         | RunnablePassthrough.assign(
-            standalone_query=get_query
+            context=lambda x: format_docs(retriever.invoke(x["input"]))
         )
-        | RunnablePassthrough.assign(
-            context=lambda x: format_docs(retriever.invoke(x["standalone_query"]))
-        )
-        | (lambda x: {
-            "context": x["context"], 
-            "input": x["standalone_query"]
-        })
-        | ChatPromptTemplate.from_template(PRODUCT_BOT_TEMPLATE)
+        | ChatPromptTemplate.from_messages([
+            ("system", PRODUCT_BOT_TEMPLATE),
+            MessagesPlaceholder(variable_name="chat_history"),
+            ("human", "{input}"),
+        ])
         | llm
         | StrOutputParser()
     )
