@@ -1,22 +1,24 @@
 import os
-import re
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
+from langchain.chains import create_retrieval_chain
+from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain.chains import create_history_aware_retriever
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.chat_history import BaseChatMessageHistory
 from langchain_core.runnables.history import RunnableWithMessageHistory
-from langchain_core.runnables import RunnablePassthrough, RunnableLambda
-from langchain_core.output_parsers import StrOutputParser
 from langchain_community.chat_message_histories import ChatMessageHistory
+from flipkart.data_ingestion import data_ingestion
 
 # Load environment variables
 load_dotenv()
 
 # Initialize LLM
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-llm = ChatGroq(model=GROQ_MODEL, temperature=0.1) # Lower temperature for consistency
+# Using llama-3.1-70b-versatile as requested in your correct code snippet
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+model = ChatGroq(model="llama-3.1-70b-versatile", temperature=0.5)
 
-# Session Store
+# Session Store for Chat History
 store = {}
 
 def get_session_history(session_id: str) -> BaseChatMessageHistory:
@@ -25,105 +27,80 @@ def get_session_history(session_id: str) -> BaseChatMessageHistory:
     return store[session_id]
 
 def clear_session_history(session_id: str):
-    store.pop(session_id, None)
-
-# --- ENHANCED PROMPT ---
-PRODUCT_BOT_TEMPLATE = """You are a specialized Flipkart Product Expert.
-You provide recommendations based on the customer reviews provided in the CONTEXT.
-
-INSTRUCTIONS:
-1. Mention specific product names found in the context.
-2. If multiple products are found, compare them briefly based on user reviews (e.g., "Users liked the battery of X but preferred the sound of Y").
-3. If the context is empty or unrelated to the question, say: "I couldn't find specific customer reviews for that product in our database. Would you like me to look for something else?"
-4. Avoid generic "I am an AI" intros. Get straight to the product details.
-
-CONTEXT:
-{context}
-
-QUESTION:
-{input}
-
-EXPERT RESPONSE:"""
-
-# --- UTILITY FUNCTIONS ---
-
-def format_docs(docs):
-    """Formats retrieved docs and prints a debug log to the console."""
-    if not docs:
-        return "No relevant product reviews found."
-    
-    formatted = []
-    for i, d in enumerate(docs):
-        # We include metadata if available to help the LLM identify the specific product
-        title = d.metadata.get('product_name', 'Unknown Product')
-        formatted.append(f"--- Product: {title} ---\nReview Snippet: {d.page_content}")
-    
-    context_str = "\n\n".join(formatted)
-    # Debug: See what is actually being sent to the LLM
-    print(f"\n[DEBUG] Context Length: {len(docs)} snippets retrieved.")
-    return context_str
+    """Utility to clear history if needed (e.g., from Streamlit)"""
+    if session_id in store:
+        store.pop(session_id)
 
 def build_chain(vstore):
-    # Use Similarity Search with Score to filter out 'random' junk
-    # 'k: 5' provides a better variety for recommendations
-    retriever = vstore.as_retriever(search_kwargs={"k": 5})
+    """
+    Constructs a conversational RAG chain using high-level LangChain factory methods.
+    """
+    # 1. Setup Retriever
+    retriever = vstore.as_retriever(search_kwargs={"k": 3})
 
-    # 1. Safety & Sanitization
-    def sanitize_and_guard(inputs: dict) -> dict:
-        text = inputs.get("input", "")
-        banned = ["hack", "exploit", "jailbreak"]
-        if any(w in text.lower() for w in banned):
-            raise ValueError("Inappropriate content detected.")
-        
-        # Redact PII
-        text = re.sub(r"[\w\.-]+@[\w\.-]+", "[EMAIL]", text)
-        inputs["input"] = text
-        return inputs
-
-    # 2. Main RAG Logic
-    # We've removed the contextualization step. 
-    # The 'input' is now passed directly to the retriever and the final prompt.
-    rag_chain = (
-        RunnableLambda(sanitize_and_guard)
-        | RunnablePassthrough.assign(
-            context=lambda x: format_docs(retriever.invoke(x["input"]))
-        )
-        | ChatPromptTemplate.from_messages([
-            ("system", PRODUCT_BOT_TEMPLATE),
-            MessagesPlaceholder(variable_name="chat_history"),
-            ("human", "{input}"),
-        ])
-        | llm
-        | StrOutputParser()
+    # 2. Contextualize Question (History Aware Retriever)
+    # This reformulates the user question based on chat history to make it standalone.
+    contextualize_q_system_prompt = (
+        "Given a chat history and the latest user question which might reference context in the chat history, "
+        "formulate a standalone question which can be understood without the chat history. "
+        "Do NOT answer the question, just reformulate it if needed and otherwise return it as is."
+    )
+    
+    contextualize_q_prompt = ChatPromptTemplate.from_messages([
+        ("system", contextualize_q_system_prompt),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}"),
+    ])
+    
+    history_aware_retriever = create_history_aware_retriever(
+        model, retriever, contextualize_q_prompt
     )
 
-    return RunnableWithMessageHistory(
+    # 3. Answer Question (Stuff Documents Chain)
+    # This takes the retrieved context and the reformulated question to generate an answer.
+    PRODUCT_BOT_TEMPLATE = """
+    Your ecommercebot bot is an expert in product recommendations and customer queries.
+    It analyzes product titles and reviews to provide accurate and helpful responses.
+    Ensure your answers are relevant to the product context and refrain from straying off-topic.
+    Your responses should be concise and informative.
+
+    CONTEXT:
+    {context}
+    """
+    
+    qa_prompt = ChatPromptTemplate.from_messages([
+        ("system", PRODUCT_BOT_TEMPLATE),
+        MessagesPlaceholder(variable_name="chat_history"),
+        ("human", "{input}"),
+    ])
+    
+    question_answer_chain = create_stuff_documents_chain(model, qa_prompt)
+
+    # 4. Final RAG Chain
+    rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
+
+    # 5. Add Conversational Memory Wrapper
+    conversational_rag_chain = RunnableWithMessageHistory(
         rag_chain,
         get_session_history,
         input_messages_key="input",
         history_messages_key="chat_history",
+        output_messages_key="answer",
     )
+    
+    return conversational_rag_chain
 
-
-
-# -------------------------------------------------
-# MAIN
-# -------------------------------------------------
 if __name__ == "__main__":
-
+    # Integration test for the module
     vstore = data_ingestion("done")
     chain = build_chain(vstore)
-
-    res1 = chain.invoke(
-        {"input": "Can you tell me the best bluetooth buds?"},
-        config={"configurable": {"session_id": "abhishek"}}
-    )
-
-    print("\nAnswer 1:\n", res1.content)
-
-    res2 = chain.invoke(
-        {"input": "What was my previous question?"},
-        config={"configurable": {"session_id": "abhishek"}}
-    )
-
-    print("\nAnswer 2:\n", res2.content)
+    
+    config = {"configurable": {"session_id": "test_user"}}
+    
+    print("--- Query 1 ---")
+    res1 = chain.invoke({"input": "can you tell me the best bluetooth buds?"}, config=config)
+    print("Answer:", res1["answer"])
+    
+    print("\n--- Query 2 (Testing Memory) ---")
+    res2 = chain.invoke({"input": "what was my previous question?"}, config=config)
+    print("Answer:", res2["answer"])
