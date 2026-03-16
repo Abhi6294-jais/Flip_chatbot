@@ -54,11 +54,14 @@ An intelligent chatbot that provides personalized product recommendations and an
    Create a `.env` file in the root directory:
    ```env
    GROQ_API_KEY=your_groq_api_key_here
+   GROQ_MODEL=llama-3.3-70b-versatile  # Optional: choose your Groq model
    ASTRA_DB_API_ENDPOINT=your_astra_db_endpoint
    ASTRA_DB_APPLICATION_TOKEN=your_astra_db_token
    ASTRA_DB_KEYSPACE=your_keyspace_name
    HF_TOKEN=your_huggingface_token  # Optional
    ```
+
+   Use `GROQ_MODEL` to switch models without editing code, e.g. `llama-3.1-8b-instant`, `llama-3.3-70b-versatile`, or other available Groq model names.
 
 5. **Ingest data into vector store** (Run once to set up the database)
    ```bash

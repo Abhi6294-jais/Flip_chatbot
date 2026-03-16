@@ -19,12 +19,15 @@ load_dotenv()
 if not os.getenv("GROQ_API_KEY"):
     raise RuntimeError("❌ GROQ_API_KEY missing from .env")
 
+# Optional model selection via environment variable (e.g., GROQ_MODEL=llama-3.1-8b-instant)
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+
 # Groq-only model initialization
 try:
-    llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.5)
+    llm = ChatGroq(model=GROQ_MODEL, temperature=0.5)
 except Exception as e:
     raise RuntimeError(
-        "Failed to initialize Groq LLM. Ensure GROQ_API_KEY is set and your Groq org/model permissions allow llama-3.1-8b-instant." 
+        f"Failed to initialize Groq LLM. Ensure GROQ_API_KEY is set and your Groq org/model permissions allow {GROQ_MODEL}."
         f" Details: {e}"
     )
 
