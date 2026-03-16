@@ -1,5 +1,11 @@
 from langchain_astradb import AstraDBVectorStore
-from langchain_huggingface import HuggingFaceEmbeddings
+try:
+    from langchain_huggingface import HuggingFaceEmbeddings
+except ImportError as e:
+    raise ImportError(
+        "Missing HuggingFace embedding packages. Install sentence-transformers and transformers from requirements.txt."
+    ) from e
+
 import os
 from flipkart.data_converter import dataconverter
 from dotenv import load_dotenv

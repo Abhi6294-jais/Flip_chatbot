@@ -4,6 +4,8 @@ langchain-community
 langchain-astradb
 langchain-huggingface
 langchain-groq
+sentence-transformers
+transformers
 pandas
 python-dotenv
 -e .
