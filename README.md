@@ -73,6 +73,20 @@ streamlit run streamlit_app.py
 
 Navigate to `http://localhost:8501` in your browser.
 
+### 🌐 Deploy to Streamlit Cloud or Heroku
+
+1. Ensure the repository has `requirements.txt`, `Procfile`, and `.streamlit/config.toml`.
+2. Set secrets in your hosting dashboard:
+   - `GROQ_API_KEY`
+   - `ASTRA_DB_API_ENDPOINT`
+   - `ASTRA_DB_APPLICATION_TOKEN`
+   - `ASTRA_DB_KEYSPACE`
+   - `HF_TOKEN` (optional)
+3. (Streamlit Cloud) create an app from this GitHub repo.
+4. (Heroku) push to Heroku git remote, then `git push heroku main`.
+
+The app should start automatically on the assigned public URL.
+
 ## 📊 Data Source
 
 The chatbot uses the `data/flipkart_product_review.csv` file containing:

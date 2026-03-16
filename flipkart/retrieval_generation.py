@@ -25,16 +25,6 @@ llm = ChatGroq(
     temperature=0.5
 )
 
-
-
-# -------------------------------------------------
-# MODEL
-# -------------------------------------------------
-llm = ChatGroq(
-    model="llama-3.1-8b-instant",
-    temperature=0.5
-)
-
 # -------------------------------------------------
 # MEMORY STORE
 # -------------------------------------------------
@@ -169,8 +159,25 @@ Response to evaluate:
                 
         return response
 
+    def sanitize_input(inputs: dict) -> dict:
+        text = inputs.get("input", "")
+
+        # Simple deterministic sanitization for common sensitive patterns
+        import re
+        email_pattern = r"[\w\.-]+@[\w\.-]+"
+        cc_pattern = r"(?:\d[ -]*?){13,16}"
+        api_key_pattern = r"sk-[A-Za-z0-9]{32}"
+
+        text = re.sub(email_pattern, "[REDACTED_EMAIL]", text)
+        text = re.sub(cc_pattern, "[REDACTED_CREDIT_CARD]", text)
+        text = re.sub(api_key_pattern, "[REDACTED_API_KEY]", text)
+
+        inputs["input"] = text
+        return inputs
+
     rag_chain = (
         RunnableLambda(check_banned_keywords)
+        | RunnableLambda(sanitize_input)
         | RunnablePassthrough.assign(
             contextualized_query=get_contextualized_question
         )
@@ -179,9 +186,6 @@ Response to evaluate:
         )
         | format_final_inputs
         | prompt
-        | PIIMiddleware("email", strategy="redact", apply_to_input=True)
-        | PIIMiddleware("credit_card", strategy="mask", apply_to_input=True)
-        | PIIMiddleware("api_key", detector=r"sk-[a-zA-Z0-9]{32}", strategy="block", apply_to_input=True)
         | llm
         | RunnableLambda(check_safety_guardrail)
     )
