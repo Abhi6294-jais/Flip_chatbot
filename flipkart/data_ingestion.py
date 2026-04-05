@@ -1,12 +1,13 @@
 from langchain_astradb import AstraDBVectorStore
 try:
-    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
 except ImportError as e:
     raise ImportError(
         "Missing HuggingFace embedding packages. Install sentence-transformers and transformers from requirements.txt."
     ) from e
 
 import os
+os.environ["TRANSFORMERS_NO_TORCHVISION"] = "1"
 from flipkart.data_converter import dataconverter
 from dotenv import load_dotenv
 load_dotenv()
@@ -30,7 +31,8 @@ if missing_vars:
         f"Missing required environment variables for deployment: {', '.join(missing_vars)}"
     )
 
-embeddings = HuggingFaceEmbeddings(
+embeddings = HuggingFaceInferenceAPIEmbeddings(
+    api_key=HF_TOKEN,
     model_name="BAAI/bge-base-en-v1.5"
 )
 
@@ -48,7 +50,7 @@ def data_ingestion(status):
 
     storage = status
 
-    if storage == None:
+    if storage is None:
         docs = dataconverter()
         insert_ids = vstore.add_documents(docs)
     
